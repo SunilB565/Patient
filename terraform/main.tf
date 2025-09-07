@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "us-east-1"
+  region = var.region
 }
 
 # ---------------- VPC ----------------
@@ -26,7 +26,7 @@ resource "aws_route_table" "public_rt" {
   tags = { Name = "patient-public-rt" }
 }
 
-# Subnet 1
+# ---------------- Subnets ----------------
 resource "aws_subnet" "public_subnet1" {
   vpc_id                  = aws_vpc.patient_vpc.id
   cidr_block              = "10.180.1.0/24"
@@ -35,7 +35,6 @@ resource "aws_subnet" "public_subnet1" {
   tags = { Name = "patient-public-subnet-1" }
 }
 
-# Subnet 2
 resource "aws_subnet" "public_subnet2" {
   vpc_id                  = aws_vpc.patient_vpc.id
   cidr_block              = "10.180.2.0/24"
@@ -44,7 +43,7 @@ resource "aws_subnet" "public_subnet2" {
   tags = { Name = "patient-public-subnet-2" }
 }
 
-# Associate Subnets with Route Table
+# Associate subnets with route table
 resource "aws_route_table_association" "subnet1_assoc" {
   subnet_id      = aws_subnet.public_subnet1.id
   route_table_id = aws_route_table.public_rt.id
@@ -57,8 +56,9 @@ resource "aws_route_table_association" "subnet2_assoc" {
 
 # ---------------- Security Group ----------------
 resource "aws_security_group" "ecs_sg" {
-  vpc_id = aws_vpc.patient_vpc.id
-  name   = "ecs-patient-sg"
+  name        = "ecs-patient-sg"
+  description = "Allow HTTP and 3000 for ECS"
+  vpc_id      = aws_vpc.patient_vpc.id
 
   ingress {
     from_port   = 80
@@ -84,13 +84,12 @@ resource "aws_security_group" "ecs_sg" {
   tags = { Name = "ecs-patient-sg" }
 }
 
-# ---------------- ECS ----------------
-# ECS Cluster
+# ---------------- ECS Cluster ----------------
 resource "aws_ecs_cluster" "patient_cluster" {
   name = "patient-cluster"
 }
 
-# IAM Role for ECS
+# IAM Role for ECS Task Execution
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "ecsTaskExecutionRole"
   assume_role_policy = jsonencode({
@@ -119,7 +118,7 @@ resource "aws_ecs_task_definition" "patient_task" {
 
   container_definitions = jsonencode([{
     name      = "patient"
-    image     = "548586340409.dkr.ecr.us-east-1.amazonaws.com/patient:latest"
+    image     = var.ecr_image
     essential = true
     portMappings = [{
       containerPort = 3000
@@ -139,10 +138,11 @@ resource "aws_lb" "patient_alb" {
 }
 
 resource "aws_lb_target_group" "patient_tg" {
-  name     = "patient-tg"
-  port     = 3000
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.patient_vpc.id
+  name        = "patient-tg"
+  port        = 3000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.patient_vpc.id
+  target_type = "ip"   # <-- important for Fargate
 
   health_check {
     path                = "/health"
