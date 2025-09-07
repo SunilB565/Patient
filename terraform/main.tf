@@ -16,7 +16,7 @@ resource "aws_internet_gateway" "igw" {
   tags   = { Name = "patient-igw" }
 }
 
-# Route Table
+# Public Route Table
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.patient_vpc.id
   route {
@@ -26,7 +26,7 @@ resource "aws_route_table" "public_rt" {
   tags = { Name = "patient-public-rt" }
 }
 
-# ---------------- Subnets ----------------
+# ---------------- Public Subnets ----------------
 resource "aws_subnet" "public_subnet1" {
   vpc_id                  = aws_vpc.patient_vpc.id
   cidr_block              = "10.180.1.0/24"
@@ -43,10 +43,19 @@ resource "aws_subnet" "public_subnet2" {
   tags = { Name = "patient-public-subnet-2" }
 }
 
-# Associate subnets with route table
+# Associate route table with subnets
 resource "aws_route_table_association" "subnet1_assoc" {
   subnet_id      = aws_subnet.public_subnet1.id
   route_table_id = aws_route_table.public_rt.id
 }
 
-resource "aws_route_table_association" "_
+resource "aws_route_table_association" "subnet2_assoc" {
+  subnet_id      = aws_subnet.public_subnet2.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# ---------------- Security Group ----------------
+resource "aws_security_group" "ecs_sg" {
+  name        = "ecs-patient-sg"
+  description = "Allow HTTP and 3000 for ECS"
+  vpc_id      = a_
