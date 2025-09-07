@@ -1,19 +1,19 @@
-name: Build and Push to ECR
+name: Build, Push Docker Image & Deploy with Terraform
 
 on:
   push:
-    branches: [ "main" ]   # runs only when you push to main
+    branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout your repo
+      # 1. Checkout source code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Configure AWS credentials (from GitHub Secrets)
+      # 2. Configure AWS credentials (stored in GitHub secrets)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -34,13 +34,30 @@ jobs:
 
           echo "Building and pushing image to $ECR_URI"
 
-          # Build Docker image
           docker build -t $IMAGE_NAME .
-
-          # Tag image with ECR URI
           docker tag $IMAGE_NAME:latest $ECR_URI:$IMAGE_TAG
           docker tag $IMAGE_NAME:latest $ECR_URI:latest
 
-          # Push both tags
           docker push $ECR_URI:$IMAGE_TAG
           docker push $ECR_URI:latest
+
+      # 5. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.6   # pick a stable version
+
+      # 6. Terraform Init
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      # 7. Terraform Plan
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: terraform plan -out=tfplan
+
+      # 8. Terraform Apply
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve tfplan
