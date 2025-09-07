@@ -58,4 +58,8 @@ resource "aws_route_table_association" "subnet2_assoc" {
 resource "aws_security_group" "ecs_sg" {
   name        = "ecs-patient-sg"
   description = "Allow HTTP and 3000 for ECS"
-  vpc_id      = a_
+  vpc_id      = aws_vpc.patient_vpc.id
+
+  ingress {
+    from_port   = 80
+    to_port_
