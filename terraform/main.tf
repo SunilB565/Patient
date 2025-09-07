@@ -136,7 +136,7 @@ resource "aws_ecs_task_definition" "patient_task" {
 
   container_definitions = jsonencode([{
     name      = "patient"
-    image     = "548586340409.dkr.ecr.ap-south-1.amazonaws.com/patient:latest"
+    image     = "548586340409.dkr.ecr.us-east-1.amazonaws.com/patient:latest"
     essential = true
     portMappings = [{
       containerPort = 3000
