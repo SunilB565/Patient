@@ -3,7 +3,7 @@ name: Build and Deploy to AWS ECR
 on:
   push:
     branches:
-      - main  # Trigger when code is pushed to main branch
+      - main  # Trigger on push to main branch
 
 jobs:
   build-and-push:
@@ -26,10 +26,16 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE_URI="897729142532.dkr.ecr.us-east-1.amazonaws.com/githubopq"
-          docker build -t $IMAGE_URI .
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/githubopq"
+          IMAGE_TAG="${GITHUB_SHA}"
+          docker build -t $IMAGE_URI:$IMAGE_TAG -t $IMAGE_URI:latest .
 
       - name: Push Docker image to ECR
         run: |
-          IMAGE_URI="897729142532.dkr.ecr.us-east-1.amazonaws.com/githubopq"
-          docker push $IMAGE_URI
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/githubopq"
+          IMAGE_TAG="${GITHUB_SHA}"
+          docker push $IMAGE_URI:$IMAGE_TAG
+          docker push $IMAGE_URI:latest
+
+      - name: Output Image URI
+        run: echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/githubopq:${GITHUB_SHA}" >> $GITHUB_ENV
