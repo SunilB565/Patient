@@ -26,10 +26,10 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}"
+          IMAGE_URI="897729142532.dkr.ecr.us-east-1.amazonaws.com/githubopq"
           docker build -t $IMAGE_URI .
 
       - name: Push Docker image to ECR
         run: |
-          IMAGE_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}"
+          IMAGE_URI="897729142532.dkr.ecr.us-east-1.amazonaws.com/githubopq"
           docker push $IMAGE_URI
