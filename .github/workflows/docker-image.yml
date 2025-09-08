@@ -1,19 +1,20 @@
-name: Build, Push Docker Image & Deploy with Terraform
+name: Build and Push Docker image to ECR
 
 on:
   push:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout source code
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2. Configure AWS credentials (stored in GitHub secrets)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -21,43 +22,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3. Login to Amazon ECR
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4. Build, Tag, and Push Docker image
       - name: Build, Tag, and Push Docker image
+        env:
+          IMAGE_NAME: patient     # change to "appointment" in the other repo
+          IMAGE_TAG: ${{ github.sha }}
+          ECR_ACCOUNT_ID: 548586340409
+          AWS_REGION: us-east-1
         run: |
-          IMAGE_NAME=patient
-          IMAGE_TAG=${{ github.sha }}
-          ECR_URI=548586340409.dkr.ecr.us-east-1.amazonaws.com/patient
+          ECR_URI=${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${IMAGE_NAME}
+          echo "Building image ${IMAGE_NAME}"
+          docker build -t ${IMAGE_NAME} .
+          docker tag ${IMAGE_NAME}:latest ${ECR_URI}:${IMAGE_TAG}
+          docker tag ${IMAGE_NAME}:latest ${ECR_URI}:latest
+          docker push ${ECR_URI}:${IMAGE_TAG}
+          docker push ${ECR_URI}:latest
 
-          echo "Building and pushing image to $ECR_URI"
-
-          docker build -t $IMAGE_NAME .
-          docker tag $IMAGE_NAME:latest $ECR_URI:$IMAGE_TAG
-          docker tag $IMAGE_NAME:latest $ECR_URI:latest
-
-          docker push $ECR_URI:$IMAGE_TAG
-          docker push $ECR_URI:latest
-
-      # 5. Setup Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.6.6   # pick a stable version
-
-      # 6. Terraform Init
-      - name: Terraform Init
-        working-directory: ./terraform
-        run: terraform init
-
-      # 7. Terraform Plan
-      - name: Terraform Plan
-        working-directory: ./terraform
-        run: terraform plan -out=tfplan
-
-      # 8. Terraform Apply
-      - name: Terraform Apply
-        working-directory: ./terraform
-        run: terraform apply -auto-approve tfplan
+      - name: Output image URIs (for logs)
+        run: |
+          echo "Patient image pushed to: ${ECR_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${IMAGE_NAME}:${{ github.sha }}"
+          echo "and :latest"
