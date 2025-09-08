@@ -1,91 +1,61 @@
-provider "aws" {
-  region = "us-east-1"
+locals {
+  name_prefix = "clinic"
 }
 
-# ---------------- VPC ----------------
-resource "aws_vpc" "patient_vpc" {
-  cidr_block           = "10.180.0.0/16"
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+# VPC
+resource "aws_vpc" "main" {
+  cidr_block = var.vpc_cidr
+  tags = { Name = "${local.name_prefix}-vpc" }
+}
 
-  tags = {
-    Name = "patient-vpc"
-  }
+# Public subnets
+resource "aws_subnet" "public" {
+  for_each = toset(var.public_subnets_cidrs)
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = each.value
+  map_public_ip_on_launch = true
+  tags = { Name = "${local.name_prefix}-public-${substr(each.value, 0, 6)}" }
+}
+
+# Private subnets
+resource "aws_subnet" "private" {
+  for_each = toset(var.private_subnets_cidrs)
+  vpc_id     = aws_vpc.main.id
+  cidr_block = each.value
+  tags = { Name = "${local.name_prefix}-private-${substr(each.value, 0, 6)}" }
 }
 
 # Internet Gateway
 resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.patient_vpc.id
-
-  tags = {
-    Name = "patient-igw"
-  }
+  vpc_id = aws_vpc.main.id
+  tags = { Name = "${local.name_prefix}-igw" }
 }
 
-# Public Route Table
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.patient_vpc.id
-
+# Public route table
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-
-  tags = {
-    Name = "patient-public-rt"
-  }
+  tags = { Name = "${local.name_prefix}-public-rt" }
 }
 
-# ---------------- Public Subnets ----------------
-resource "aws_subnet" "public_subnet1" {
-  vpc_id                  = aws_vpc.patient_vpc.id
-  cidr_block              = "10.180.1.0/24"
-  availability_zone       = "us-east-1a"
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "patient-public-subnet-1"
-  }
+resource "aws_route_table_association" "public_assoc" {
+  for_each = aws_subnet.public
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.public.id
 }
 
-resource "aws_subnet" "public_subnet2" {
-  vpc_id                  = aws_vpc.patient_vpc.id
-  cidr_block              = "10.180.2.0/24"
-  availability_zone       = "us-east-1b"
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "patient-public-subnet-2"
-  }
-}
-
-# Associate route table with subnets
-resource "aws_route_table_association" "subnet1_assoc" {
-  subnet_id      = aws_subnet.public_subnet1.id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-resource "aws_route_table_association" "subnet2_assoc" {
-  subnet_id      = aws_subnet.public_subnet2.id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-# ---------------- Security Group ----------------
-resource "aws_security_group" "ecs_sg" {
-  name        = "ecs-patient-sg"
-  description = "Allow HTTP and 3000 for ECS"
-  vpc_id      = aws_vpc.patient_vpc.id
+# Security Groups
+resource "aws_security_group" "alb_sg" {
+  name   = "${local.name_prefix}-alb-sg"
+  vpc_id = aws_vpc.main.id
 
   ingress {
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 3000
-    to_port     = 3000
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -96,119 +66,247 @@ resource "aws_security_group" "ecs_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = { Name = "${local.name_prefix}-alb-sg" }
+}
 
-  tags = {
-    Name = "ecs-patient-sg"
+resource "aws_security_group" "ecs_sg" {
+  name   = "${local.name_prefix}-ecs-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = var.container_port
+    to_port         = var.container_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+    description     = "Allow ALB -> ECS"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = { Name = "${local.name_prefix}-ecs-sg" }
+}
+
+# ALB
+resource "aws_lb" "alb" {
+  name               = "${local.name_prefix}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = values(aws_subnet.public)[*].id
+  tags = { Name = "${local.name_prefix}-alb" }
+}
+
+# Target Groups
+resource "aws_lb_target_group" "patient_tg" {
+  name     = "${local.name_prefix}-patient-tg"
+  port     = var.container_port
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+  target_type = "ip"
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200-399"
   }
 }
 
-# ---------------- ECS Cluster ----------------
-resource "aws_ecs_cluster" "patient_cluster" {
-  name = "patient-cluster"
+resource "aws_lb_target_group" "appointment_tg" {
+  name     = "${local.name_prefix}-appointment-tg"
+  port     = var.container_port
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+  target_type = "ip"
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200-399"
+  }
 }
 
-# ---------------- IAM Role ----------------
+# Listener (HTTP)
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = 80
+  protocol          = "HTTP"
+  default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Not Found"
+      status_code  = "404"
+    }
+  }
+}
+
+# Listener rules
+resource "aws_lb_listener_rule" "patient_rule" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 100
+  action {
+    type = "forward"
+    target_group_arn = aws_lb_target_group.patient_tg.arn
+  }
+  condition {
+    path_pattern {
+      values = ["/patient*", "/patient/*"]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "appointment_rule" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 110
+  action {
+    type = "forward"
+    target_group_arn = aws_lb_target_group.appointment_tg.arn
+  }
+  condition {
+    path_pattern {
+      values = ["/appointment*", "/appointment/*"]
+    }
+  }
+}
+
+# ECS Cluster
+resource "aws_ecs_cluster" "cluster" {
+  name = "${local.name_prefix}-ecs-cluster"
+}
+
+# IAM Roles for ECS tasks
+data "aws_iam_policy_document" "ecs_task_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ecs_task_role" {
+  name               = "${local.name_prefix}-ecs-task-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "patient-ecsTaskExecutionRole"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Principal = { Service = "ecs-tasks.amazonaws.com" },
-      Action    = "sts:AssumeRole"
-    }]
-  })
+  name = "${local.name_prefix}-ecs-exec-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
+resource "aws_iam_role_policy_attachment" "exec_role_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ---------------- ECS Task Definition ----------------
-resource "aws_ecs_task_definition" "patient_task" {
+# Task Definitions (patient)
+resource "aws_ecs_task_definition" "patient" {
   family                   = "patient-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "256"
   memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
-  container_definitions = jsonencode([{
-    name      = "patient"
-    image     = "548586340409.dkr.ecr.us-east-1.amazonaws.com/patient:latest"
-    essential = true
-    portMappings = [{
-      containerPort = 3000
-      hostPort      = 3000
-      protocol      = "tcp"
-    }]
-  }])
+  container_definitions = jsonencode([
+    {
+      name      = "patient"
+      image     = var.patient_image
+      essential = true
+      portMappings = [
+        {
+          containerPort = var.container_port
+          protocol      = "tcp"
+        }
+      ]
+      healthCheck = {
+        command = ["CMD-SHELL", "curl -f http://localhost:${var.container_port}/ || exit 1"]
+        interval = 30
+        timeout = 5
+        retries = 2
+        startPeriod = 10
+      }
+    }
+  ])
 }
 
-# ---------------- Load Balancer ----------------
-resource "aws_lb" "patient_alb" {
-  name               = "patient-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.ecs_sg.id]
-  subnets            = [aws_subnet.public_subnet1.id, aws_subnet.public_subnet2.id]
+# Task Definitions (appointment)
+resource "aws_ecs_task_definition" "appointment" {
+  family                   = "appointment-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "appointment"
+      image     = var.appointment_image
+      essential = true
+      portMappings = [
+        {
+          containerPort = var.container_port
+          protocol      = "tcp"
+        }
+      ]
+      healthCheck = {
+        command = ["CMD-SHELL", "curl -f http://localhost:${var.container_port}/ || exit 1"]
+        interval = 30
+        timeout = 5
+        retries = 2
+        startPeriod = 10
+      }
+    }
+  ])
 }
 
-resource "aws_lb_target_group" "patient_tg" {
-  name        = "patient-tg"
-  port        = 3000
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.patient_vpc.id
-  target_type = "ip" # required for Fargate
-
-  health_check {
-    path                = "/health"
-    protocol            = "HTTP"
-    matcher             = "200"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-  }
-}
-
-resource "aws_lb_listener" "http_listener" {
-  load_balancer_arn = aws_lb.patient_alb.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.patient_tg.arn
-  }
-}
-
-# ---------------- ECS Service ----------------
-resource "aws_ecs_service" "patient_service" {
-  name            = "patient-service"
-  cluster         = aws_ecs_cluster.patient_cluster.id
-  task_definition = aws_ecs_task_definition.patient_task.arn
-  desired_count   = 1
+# ECS Services
+resource "aws_ecs_service" "patient" {
+  name            = "patient-svc"
+  cluster         = aws_ecs_cluster.cluster.id
+  task_definition = aws_ecs_task_definition.patient.arn
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
-
   network_configuration {
-    subnets          = [aws_subnet.public_subnet1.id, aws_subnet.public_subnet2.id]
-    assign_public_ip = true
-    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets         = values(aws_subnet.private)[*].id
+    security_groups = [aws_security_group.ecs_sg.id]
+    assign_public_ip = false
   }
-
   load_balancer {
     target_group_arn = aws_lb_target_group.patient_tg.arn
     container_name   = "patient"
-    container_port   = 3000
+    container_port   = var.container_port
   }
-
-  depends_on = [aws_lb_listener.http_listener]
+  depends_on = [aws_lb_listener.http]
 }
 
-# ---------------- Outputs ----------------
-output "alb_dns_name" {
-  value       = aws_lb.patient_alb.dns_name
-  description = "Public DNS of the ALB to access patient service"
+resource "aws_ecs_service" "appointment" {
+  name            = "appointment-svc"
+  cluster         = aws_ecs_cluster.cluster.id
+  task_definition = aws_ecs_task_definition.appointment.arn
+  desired_count   = var.desired_count
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets         = values(aws_subnet.private)[*].id
+    security_groups = [aws_security_group.ecs_sg.id]
+    assign_public_ip = false
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.appointment_tg.arn
+    container_name   = "appointment"
+    container_port   = var.container_port
+  }
+  depends_on = [aws_lb_listener.http]
 }
